@@ -26,9 +26,6 @@ SUMMARY_PATH = OUTPUT_DIR / "frontier_audio_meddies_small_test_summary.json"
 ROWS_PATH = OUTPUT_DIR / "frontier_audio_meddies_small_test_rows.json"
 RESPONSE_LOG_PATH = OUTPUT_DIR / "frontier_audio_meddies_small_test_responses.jsonl"
 
-DEFAULT_PARQUET_PATH = Path(
-    r"D:\projects\meddies\asr\tmp\hf_staging\meddies-asr-small-test\data\vi-faptv-human-gold\test-00000.parquet"
-)
 PARQUET_ENV_VAR = "MEDDIES_SMALL_TEST_PARQUET_PATH"
 MODEL_ENV_VAR = "FRONTIER_AUDIO_MEDDIES_SMALL_TEST_MODEL"
 LIMIT_ENV_VAR = "MEDDIES_SMALL_TEST_LIMIT"
@@ -95,10 +92,8 @@ def resolve_parquet_path() -> Path:
         path = Path(override)
         if path.exists():
             return path
-    if DEFAULT_PARQUET_PATH.exists():
-        return DEFAULT_PARQUET_PATH
     raise FileNotFoundError(
-        f"Meddies small-test parquet not found. Set {PARQUET_ENV_VAR} or restore {DEFAULT_PARQUET_PATH}."
+        f"Meddies small-test parquet not found. Set {PARQUET_ENV_VAR} to an authorized local Parquet file."
     )
 
 

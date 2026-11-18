@@ -103,7 +103,7 @@ python execution/benchmarks/audio_meddies_small_test/frontier_audio_meddies_smal
 Useful overrides:
 
 ```powershell
-$env:MEDDIES_SMALL_TEST_PARQUET_PATH="D:\path\to\test-00000.parquet"
+$env:MEDDIES_SMALL_TEST_PARQUET_PATH="path/to/test-00000.parquet"
 $env:FRONTIER_AUDIO_MEDDIES_SMALL_TEST_MODEL="google/gemini-3.5-flash"
 ```
 
@@ -118,7 +118,7 @@ python execution/benchmarks/audio_vimedcss/frontier_audio_vimedcss_bench.py
 Optional overrides:
 
 ```powershell
-$env:VIMEDCSS_AUDIO_BUNDLE_DIR="D:\path\to\vimedcss_audio_bundle_20"
+$env:VIMEDCSS_AUDIO_BUNDLE_DIR="path/to/vimedcss_audio_bundle_20"
 $env:FRONTIER_AUDIO_VIMEDCSS_MODEL="google/gemini-3.5-flash"
 ```
 

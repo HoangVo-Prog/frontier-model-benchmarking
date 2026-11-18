@@ -151,6 +151,8 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/
@@ -158,6 +160,17 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Frontier datasets, outputs, credentials, and local caches
+/data/
+/datasets/
+/runs/
+/cache/
+.cache/
+.kaggle/
+kaggle.json
+kagglehub_cache/
+.cache/kagglehub/
 
 # Conda environments
 conda-meta/
