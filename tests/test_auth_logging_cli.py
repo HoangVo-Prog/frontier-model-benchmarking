@@ -1,32 +1,35 @@
+"""CLI/auth/logging regressions with no live Kaggle requests."""
 import json
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
 
 from frontier_client import AuthenticationError, FrontierClient
-from frontier_client.auth import auth_status, require_proxy_credentials
+from frontier_client.auth import auth_status
 from frontier_client.cli import app
 from frontier_client.logging import JSONLLogger
 
 
-def test_missing_expired_and_valid_proxy_auth(monkeypatch):
-    monkeypatch.delenv("MODEL_PROXY_URL", raising=False)
-    monkeypatch.delenv("MODEL_PROXY_API_KEY", raising=False)
-    monkeypatch.delenv("MODEL_PROXY_EXPIRY_TIME", raising=False)
-    with pytest.raises(AuthenticationError, match="benchmarks auth"):
-        require_proxy_credentials()
-    monkeypatch.setenv("MODEL_PROXY_URL", "https://test.invalid/openapi")
-    monkeypatch.setenv("MODEL_PROXY_API_KEY", "hidden-secret")
-    monkeypatch.setenv("MODEL_PROXY_EXPIRY_TIME", (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat())
-    assert auth_status()["proxy_expired"] is True
-    with pytest.raises(AuthenticationError, match="expired"):
-        require_proxy_credentials()
-    monkeypatch.setenv("MODEL_PROXY_EXPIRY_TIME", (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat())
-    require_proxy_credentials()
-    assert "hidden-secret" not in json.dumps(auth_status())
+def test_account_env_status_no_secrets(monkeypatch):
+    monkeypatch.setenv("KAGGLE_ACCOUNTS", "lab,personal")
+    monkeypatch.setenv("KAGGLE_API_TOKEN_LAB", "secret-lab")
+    monkeypatch.setenv("KAGGLE_API_TOKEN_PERSONAL", "secret-personal")
+    status = auth_status()
+    assert status["accounts_configured"] == 2
+    assert status["account_names"] == ["lab", "personal"]
+    assert "secret" not in json.dumps(status)
+    assert "expiry" not in json.dumps(status)
+
+
+def test_missing_named_token(monkeypatch):
+    from frontier_client.accounts import configured_accounts
+    monkeypatch.setenv("KAGGLE_ACCOUNTS", "lab,personal")
+    monkeypatch.setenv("KAGGLE_API_TOKEN_LAB", "first")
+    monkeypatch.delenv("KAGGLE_API_TOKEN_PERSONAL", raising=False)
+    with pytest.raises(AuthenticationError, match="PERSONAL"):
+        configured_accounts()
 
 
 def test_jsonl_concurrent_safe(tmp_path):
@@ -72,29 +75,37 @@ def test_cli_chat_commands(monkeypatch, sdk, png, tmp_path):
     assert data["messages"][0]["image"] == str(png)
 
 
-def test_cli_auth_refresh_delegates(monkeypatch):
+def test_cli_auth_refresh_in_memory_only(monkeypatch, tmp_path):
     from frontier_client import cli
-    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/kaggle")
-    calls = []
-    monkeypatch.setattr(cli.subprocess, "run", lambda args, **kwargs: (calls.append(args) or SimpleNamespace(returncode=0)))
+    path = tmp_path / ".env"
+    path.write_text("KAGGLE_API_TOKEN=SECRET\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "_pool", lambda: SimpleNamespace(refresh_credentials=lambda: [{"account": "lab", "status": "ready"}]))
     result = CliRunner().invoke(app, ["auth", "refresh"])
     assert result.exit_code == 0, result.output
-    assert calls == [["/usr/bin/kaggle", "benchmarks", "auth", "-y", "--env-file", ".env"]]
+    assert "Nothing written to .env" in result.output
+    assert "SECRET" not in result.output
+    assert path.read_text() == "KAGGLE_API_TOKEN=SECRET\n"
 
 
-def test_cli_quota_delegates(monkeypatch):
+def test_cli_quota_uses_api_not_subprocess(monkeypatch):
     from frontier_client import cli
-    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/kaggle")
-    calls = []
-    monkeypatch.setattr(cli.subprocess, "run", lambda args, **kwargs: (calls.append(args) or SimpleNamespace(returncode=0)))
+    rows = [{"account": "lab", "available": True, "balances": [
+        {"period": "daily", "remaining_usd": 4.0}, {"period": "monthly", "remaining_usd": 80.0}]}]
+    monkeypatch.setattr(cli, "_pool", lambda: SimpleNamespace(quotas=lambda refresh: rows))
     result = CliRunner().invoke(app, ["quota"])
     assert result.exit_code == 0, result.output
-    assert calls == [["/usr/bin/kaggle", "benchmarks", "quota"]]
+    assert '"account": "lab"' in result.output
+    assert '"period": "monthly"' in result.output
 
 
-def test_cli_doctor_no_secrets(monkeypatch):
-    monkeypatch.setenv("MODEL_PROXY_API_KEY", "TOP_SECRET")
-    result = CliRunner().invoke(app, ["doctor"])
-    assert result.exit_code == 0, result.output
-    assert "TOP_SECRET" not in result.output
-    assert "local_model_count" in result.output
+def test_cli_accounts_and_auth_doctor_no_secrets(monkeypatch):
+    monkeypatch.setenv("KAGGLE_ACCOUNTS", "alpha,beta")
+    monkeypatch.setenv("KAGGLE_API_TOKEN_ALPHA", "SUPER_SECRET")
+    monkeypatch.setenv("KAGGLE_API_TOKEN_BETA", "TOP_SECRET")
+    for args in (("accounts", "list"), ("auth", "check"), ("doctor",)):
+        result = CliRunner().invoke(app, list(args))
+        assert result.exit_code == 0, result.output
+        assert "SUPER_SECRET" not in result.output
+        assert "TOP_SECRET" not in result.output
+        assert "alpha" in result.output
+        assert "beta" in result.output

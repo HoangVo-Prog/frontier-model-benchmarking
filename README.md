@@ -1,17 +1,8 @@
-# Frontier Chat — Kaggle Model Proxy
+# Frontier local chat client
 
-A minimal **local** Python API and `frontier` CLI for text prompts, images, and isolated multi-turn conversations through the official **Kaggle Model Proxy SDK** (`kaggle-benchmarks`). No benchmark evaluation, hosted runs, leaderboards, or direct provider APIs.
-
-```bash
-frontier models list
-frontier ask --model MODEL_ID --prompt "Hello!"
-frontier ask --model MODEL_ID --prompt "Describe this" --image photo.png
-frontier chat --model MODEL_ID
-```
+A small Python package and `frontier` CLI for text, images and multi-turn chat through the **official Kaggle Model Proxy SDK**. No hosted benchmark jobs, direct provider APIs, or dataset pipelines.
 
 ## Install
-
-Python 3.11+; existing environment is fine:
 
 ```bash
 conda activate linux-python-3-11
@@ -19,58 +10,106 @@ python -m pip install -e ".[dev]"
 frontier doctor
 ```
 
-## Authentication and **local** model access
+## Configure Kaggle accounts in `.env` (no CLI login required)
 
-1. Obtain a Kaggle account token from [Kaggle settings](https://www.kaggle.com/settings/api). Set `KAGGLE_API_TOKEN` in the shell or private `.env`.
-2. In a **temporary directory** (so SDK examples and documentation don't clutter this repo), initialize Kaggle's *local* Model Proxy environment:
+Copy `.env.example` to `.env` **once** and edit it yourself. The client only reads it. It never modifies `.env`, writes Proxy keys, or saves an expiry timestamp.
 
-   ```bash
-   mkdir -p /tmp/frontier-kaggle-init
-   cd /tmp/frontier-kaggle-init
-   kaggle benchmarks init -y
-   # Copy the generated .env to this project's root, or set FRONTIER_ENV_FILE.
-   ```
+One account:
 
-   The generated `.env` includes temporary `MODEL_PROXY_*` credentials and the **comma-separated `LLMS_AVAILABLE` local allowlist**. Make sure `LLM_DEFAULT` is one of those models; the client also selects an allowed fallback if the default is missing. To refresh the credentials from your project directory: `frontier auth refresh` (equivalent to `kaggle benchmarks auth -y --env-file .env`). Then run `frontier auth check`.
+```dotenv
+KAGGLE_API_TOKEN=KGAT_your_real_account_token
+LLMS_AVAILABLE=MODEL_ID_1,MODEL_ID_2
+```
 
-   If you already used `kaggle benchmarks auth` without `init`, you still need `LLMS_AVAILABLE` from `init`. You can copy the list into `.env` yourself. `frontier models list` reports **only this local configuration**, not the full Kaggle hosted model catalog. Local credentials cannot call arbitrary hosted models. Access can also be denied by server-side policy even for listed IDs. To update the model allowlist, rerun `init` in a temporary directory and copy the refreshed configuration.
+Multiple accounts in priority order (named):
 
-`frontier quota` checks **Model Proxy inference spend**, not GPU hours. `.env` and `logs/` are ignored by Git. Never commit credentials.
+```dotenv
+KAGGLE_ACCOUNTS=primary,backup
+KAGGLE_API_TOKEN_PRIMARY=KGAT_your_first_account_token
+KAGGLE_API_TOKEN_BACKUP=KGAT_your_second_account_token
+LLMS_AVAILABLE=MODEL_ID_1,MODEL_ID_2
+FRONTIER_MIN_REMAINING_USD=0.05
+FRONTIER_QUOTA_CACHE_SECONDS=30
+```
+
+Or paste multiple tokens on one line and receive automatic aliases `account_1`, `account_2`, etc.:
+
+```dotenv
+KAGGLE_API_TOKENS=KGAT_first_account_token,KGAT_second_account_token
+LLMS_AVAILABLE=MODEL_ID_1,MODEL_ID_2
+```
+
+Precedence is `KAGGLE_ACCOUNTS`, then `KAGGLE_API_TOKENS`, then `KAGGLE_API_TOKEN`. `KAGGLE_API_TOKEN_*` are **Kaggle account API tokens**, not `MODEL_PROXY_API_KEY` values. Generate them in [Kaggle account settings](https://www.kaggle.com/settings/api). Keep `.env` private; it is ignored by Git. API keys from **different permitted Kaggle accounts** are supported. Multiple tokens from the same account may share the same account quota and do not provide independent limits.
+
+The client uses the same **first-party Kaggle API endpoints** as `kaggle benchmarks auth` and `kaggle benchmarks quota`. For each account it requests a short-lived Model Proxy token **in memory** and refreshes it automatically before expiry (or once on a Proxy authentication error). Expiry exists at Kaggle even though you do not configure or persist it. `frontier auth refresh` explicitly refreshes tokens in its **current process only**; subsequent CLI runs mint fresh tokens automatically. Browser login/`kaggle auth login` is optional and not used by this workflow.
+
+## Commands
+
+```bash
+frontier accounts list
+frontier auth check              # inspect .env only
+frontier auth check --verify     # test Kaggle API/quota
+frontier auth refresh            # re-mint Proxy credentials in memory
+frontier quota                   # daily and monthly quota per account
+frontier models list             # only LLMS_AVAILABLE, not hosted catalog
+frontier ask --model MODEL_ID --prompt "Hello!"
+frontier ask --model MODEL_ID --prompt "Describe this." --image photo.png
+frontier chat --model MODEL_ID
+```
+
+Interactive chat: `/reset`, `/model MODEL_ID`, `/image PATH PROMPT`, `/export FILE.json`, `/quit`. Quote file paths containing spaces.
+
+### Automatic quota rotation
+
+Before an inference request, `frontier` checks quota via Kaggle's API (cached for 30 seconds by default). An account is usable only if **all** daily/monthly periods have more than `FRONTIER_MIN_REMAINING_USD` left. Accounts are selected in the `.env` order; the client sticks to one until its available quota drops below the threshold or a **quota-specific** inference error occurs. It then switches to the next usable account. Ordinary HTTP 429 rate limiting, invalid model requests, image failures and unrelated errors **do not** trigger account rotation. An authentication failure refreshes that account's temporary token once, instead of silently switching accounts. If all accounts are unavailable, inference fails with an actionable error rather than guessing quota balances.
+
+During a chat, quota failover retains the same SDK conversation thread/history. Each CLI `ask` process begins anew and independently checks quota; account state is kept only in memory. Quota checks can be slightly stale within the configured cache duration; set `FRONTIER_QUOTA_CACHE_SECONDS=0` for a preflight before every request. This client does not bypass Kaggle's account limits or guarantee that a quota check reserves budget.
 
 ## Python API
 
 ```python
 from frontier_client import FrontierClient
 
-client = FrontierClient(model="MODEL_ID")  # Choose from frontier models list
-print(client.prompt("Explain transformers.").text)
-print(client.prompt("Describe this.", image="photo.png").text)
+client = FrontierClient(model="MODEL_ID")
+response = client.prompt("Hello!")
+print(response.text, response.usage, response.metadata.get("account"))
+response = client.prompt("Describe this.", image="photo.png")
 
-with client.chat(system_prompt="Keep answers brief.") as conversation:
-    conversation.send("Explain transformers.")
-    print(conversation.send("Explain more simply.").text)
-    conversation.reset()
-    conversation.export("chat.json")
+with client.chat(system_prompt="Be concise.") as chat:
+    chat.send("Explain attention.")
+    print(chat.send("Simplify that.").text)
 ```
 
-Images: PNG/JPEG local files (up to 20 MiB) or public HTTPS URLs ending in `.png`, `.jpg`, or `.jpeg`. Choose a vision-capable model. Structured output is available with `schema=SomeDataclass` where supported by the SDK. Responses expose `.text`, `.structured`, `.usage`, `.latency_seconds`, `.request_id`, and `.timestamp`. Unreported usage remains `None`.
+`FrontierClient` also accepts `logging=False`, `log_dir=...`, `log_prompts=True`, `temperature=...`, `reasoning=...`, `api="genai"`, and `schema=YourDataclass` when supported by the specific model. All model calls use Kaggle Model Proxy SDK adapters, not direct provider APIs.
 
-## Interactive chat
+## Logging and privacy
 
-`frontier chat --model MODEL_ID` accepts `/reset`, `/model MODEL_ID` (starts a fresh session), `/image PATH PROMPT` (quote paths with spaces), `/export FILE.json`, and `/quit`. Exports explicitly contain prompts and responses, unlike default request logs.
+By default requests append to `logs/requests.jsonl` with request ID, account **alias**, attempted accounts, model, response, real SDK usage/cost when supplied, latency, status, and sanitized errors. The prompt text is omitted unless `log_prompts=True`, but model responses are logged. No Kaggle account tokens, Proxy tokens, authorization headers, Base64 image data or raw exception bodies are logged. `--no-log` disables writing requests. Chat export explicitly writes prompts and responses to the named JSON file.
 
-## Logging
+Only locally configured `LLMS_AVAILABLE` models are offered. Kaggle's hosted catalog may contain models unavailable to local Proxy credentials. If a model has no local permission, Kaggle will reject it. `LLMS_AVAILABLE` is a local allowlist, not a claim of account authorization.
 
-Successful and failed requests append to `logs/requests.jsonl` by default. Each entry includes model, request ID, timestamp, prompt type, sanitized image reference, response, available usage/cost, latency, error category and chat session ID. Prompt text is omitted by default; full **responses are stored**, so use `--no-log` or `FrontierClient(..., logging=False)` for sensitive outputs. Choose another directory via `--log-dir DIR` or `log_dir=...`. The Python API also accepts `log_prompts=True`. Neither image bytes nor credentials are logged.
+## Troubleshooting
 
-## Troubleshooting and tests
+- Missing account: set `KAGGLE_API_TOKEN` or `KAGGLE_ACCOUNTS` and named tokens in `.env`.
+- `frontier quota` unavailable: ensure the Kaggle account has Model Proxy access and completed any necessary identity verification.
+- Missing `LLMS_AVAILABLE`: supply your local model allowlist (not Kaggle's complete hosted catalog).
+- No eligible account: inspect `frontier quota`, verify your threshold and wait for the normal Kaggle refill. Multiple tokens on the same account may share quota.
+- Proxy authentication error: the client automatically re-mints the temporary Proxy token once.
+- Model unavailable: choose a locally permitted ID and check vision support for image prompts.
+- Account login through Kaggle CLI remains optional: `kaggle auth login`. It does **not** replace the tokens explicitly listed in `.env`.
 
-- Missing or expired credentials: `frontier auth refresh`; inspect with `frontier auth check`. Restart already-running processes after refresh.
-- No local models: populate `LLMS_AVAILABLE` using the Kaggle CLI `init` command in a temporary directory.
-- Model rejected: use an ID from `frontier models list` and verify account/model capabilities. The local allowlist does not guarantee server authorization.
-- CLI or dependency issue: run `frontier doctor` within the active Python environment.
-- Inference quota: `frontier quota`. Failed images: use a vision-capable model and valid PNG/JPEG files.
+Run `python -m pytest -q` for mocked tests; they never use real credentials or paid inference. The first-party model/token endpoints require network access and cannot be fully verified without real Kaggle credentials.
 
-Credential-free unit tests: `python -m pytest -q`. A real inference test is optional and uses your personal quota.
+## Test environments with a local `.env`
 
-Official docs: [Kaggle Benchmarks SDK](https://github.com/Kaggle/kaggle-benchmarks) · [Kaggle CLI](https://github.com/Kaggle/kaggle-cli/blob/main/docs/benchmarks.md)
+Unit tests explicitly isolate the missing-local-model case from any developer
+`.env` file. Running `frontier models list` normally **should** discover models
+from your `.env`; clearing `LLMS_AVAILABLE` in a test is not enough by itself.
+To run tests on WSL/Windows-mounted directories that disallow pytest cache writes:
+
+```bash
+python -m pytest -q -p no:cacheprovider
+```
+
+If an earlier version of the bundle stopped after staging files due to this
+test, see `APPLY_TO_BRANCH.md` for the safe `--resume` command.

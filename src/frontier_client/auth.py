@@ -1,21 +1,22 @@
-"""Authentication and the locally permitted Kaggle Model Proxy model set."""
+"""Read-only .env configuration for local Kaggle Model Proxy inference."""
 from __future__ import annotations
 
 import os
 import shutil
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .errors import AuthenticationError, ModelRequestError
+from .accounts import configured_accounts
+from .errors import ModelRequestError
 
-REFRESH = "kaggle benchmarks auth -y --env-file .env"
-# `auth` fetches credentials, but `init` also obtains LLMS_AVAILABLE.
-MODEL_SETUP = "Run `kaggle benchmarks init -y` in a temporary directory, then copy LLMS_AVAILABLE into your private .env."
+MODEL_SETUP = (
+    "Provide LLMS_AVAILABLE as a comma-separated local model allowlist in your private .env. "
+    "Kaggle's hosted model catalog is not a guarantee of local access."
+)
 
 
 def load_project_env(path: str | Path | None = None) -> None:
-    """Read a private .env, never overriding exported shell variables."""
+    """Read .env only; never create or modify it, never override shell values."""
     from dotenv import load_dotenv
 
     explicit = path or os.getenv("FRONTIER_ENV_FILE")
@@ -33,7 +34,6 @@ def load_project_env(path: str | Path | None = None) -> None:
 
 
 def local_models() -> tuple[str, ...]:
-    """Return the current local allowlist; never consult the hosted catalog."""
     raw = os.getenv("LLMS_AVAILABLE", "")
     return tuple(dict.fromkeys(x.strip() for x in raw.split(",") if x.strip()))
 
@@ -45,47 +45,18 @@ def validate_local_model(model: str) -> tuple[str, ...]:
     if model not in models:
         raise ModelRequestError(
             f"Model {model!r} is not in local LLMS_AVAILABLE. "
-            "Run `frontier models list` to inspect your credential's local allowlist."
+            "Run `frontier models list` to inspect the configured local allowlist."
         )
     return models
 
 
-def _expiry() -> datetime | None:
-    raw = os.getenv("MODEL_PROXY_EXPIRY_TIME", "").strip()
-    if not raw:
-        return None
-    try:
-        parsed = (datetime.fromtimestamp(float(raw), tz=timezone.utc)
-                  if raw.replace(".", "", 1).isdigit()
-                  else datetime.fromisoformat(raw.replace("Z", "+00:00")))
-        return parsed.astimezone(timezone.utc) if parsed.tzinfo else None
-    except (ValueError, OverflowError, OSError):
-        return None
-
-
 def auth_status() -> dict[str, Any]:
-    """Return status only: never expose token, API URL or headers."""
-    kaggle_dir = Path.home() / ".kaggle"
-    expiry = _expiry()
-    account = bool(os.getenv("KAGGLE_API_TOKEN") or
-                   (os.getenv("KAGGLE_USERNAME") and os.getenv("KAGGLE_KEY")) or
-                   (kaggle_dir / "kaggle.json").is_file() or
-                   (kaggle_dir / "access_token").is_file())
+    """Display only account aliases and configuration readiness."""
+    accounts = configured_accounts()
     return {
-        "kaggle_cli": shutil.which("kaggle") is not None,
-        "account_credentials_present": account,
-        "proxy_credentials_present": bool(os.getenv("MODEL_PROXY_API_KEY") and os.getenv("MODEL_PROXY_URL")),
-        "proxy_expiry_known": expiry is not None,
-        "proxy_expired": (expiry <= datetime.now(timezone.utc)) if expiry else None,
+        "kaggle_cli_installed": shutil.which("kaggle") is not None,
+        "accounts_configured": len(accounts),
+        "account_names": [account.name for account in accounts],
         "local_models_configured": bool(local_models()),
+        "authentication": "Kaggle API token; in-memory Model Proxy credentials",
     }
-
-
-def require_proxy_credentials() -> None:
-    state = auth_status()
-    if not state["proxy_credentials_present"]:
-        raise AuthenticationError(
-            f"Kaggle Model Proxy credentials are missing. Configure your Kaggle account and run `{REFRESH}`."
-        )
-    if state["proxy_expired"] is True:
-        raise AuthenticationError(f"Kaggle Model Proxy credentials expired. Refresh with `{REFRESH}`.")
