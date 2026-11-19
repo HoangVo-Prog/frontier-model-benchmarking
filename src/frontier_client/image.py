@@ -11,6 +11,13 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024
 EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
 
+def sanitized_image_ref(value: str | Path) -> str:
+    """Keep an image reference for export without signed URL query secrets."""
+    raw = str(value)
+    url = urlsplit(raw)
+    return url._replace(query="", fragment="").geturl() if url.scheme in {"https", "http"} else raw
+
+
 def prepare_image(value: str | Path, sdk_images: object) -> tuple[object, str]:
     """Return (official SDK ImageContent, safe reference); no raw bytes in logs."""
     if not isinstance(value, (str, Path)) or not str(value).strip():
@@ -30,8 +37,7 @@ def prepare_image(value: str | Path, sdk_images: object) -> tuple[object, str]:
         if Path(url.path).suffix.lower() not in EXTENSIONS:
             raise ImageInputError("Image URL must end in .png, .jpg, or .jpeg.")
         # Avoid persisting signed/private URL query parameters in JSONL logs.
-        safe_ref = url._replace(query="", fragment="").geturl()
-        return sdk_images.from_url(raw), safe_ref
+        return sdk_images.from_url(raw), sanitized_image_ref(raw)
     if url.scheme:
         raise ImageInputError("Only local files or public HTTPS image URLs are accepted.")
     path = Path(raw).expanduser()
