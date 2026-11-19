@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -38,8 +37,9 @@ def test_image_prompt_factory(client, sdk, png, tmp_path):
 
 
 def test_image_url(client, sdk):
-    client.prompt("describe", image="https://example.org/pic.png")
-    assert sdk.model.calls[-1]["kwargs"]["image"] == {"url": "https://example.org/pic.png"}
+    client.prompt("describe", image="https://example.org/pic.png?signature=PRIVATE")
+    assert sdk.model.calls[-1]["kwargs"]["image"] == {"url": "https://example.org/pic.png?signature=PRIVATE"}
+    assert "signature=PRIVATE" not in (client.logger.file).read_text()
 
 
 @pytest.mark.parametrize("image", ["missing.png", "invalid.gif", "ftp://foo/bar.png", "https://127.0.0.1/pic.png", "http://example.org/pic.png"])
@@ -81,6 +81,13 @@ def test_failed_request_redacted(client, sdk, tmp_path):
     assert '"error"' in data
 
 
+def test_sdk_value_error_redacted(client, sdk, tmp_path):
+    sdk.model.failure = ValueError("400 bad request authorization SECRET_KEY")
+    with pytest.raises(ModelRequestError):
+        client.prompt("hi")
+    assert "SECRET_KEY" not in (tmp_path / "requests.jsonl").read_text()
+
+
 def test_opt_out_logging(tmp_path, sdk):
     client = FrontierClient("fake/model", sdk=sdk, logging=False)
     client.prompt("hi")
@@ -107,3 +114,14 @@ def test_parameter_validation(sdk, tmp_path):
 def test_model_init_failure(sdk):
     with pytest.raises(ModelRequestError):
         FrontierClient("missing", sdk=sdk, logging=False)
+
+
+def test_image_sdk_factory_failure_is_sanitized(client, sdk, tmp_path):
+    def bad_factory(path):
+        raise RuntimeError("403 denied: Authorization secret=PRIVATE")
+    sdk.content_types.images.from_path = bad_factory
+    local = tmp_path / "good.png"
+    local.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 9)
+    with pytest.raises(AuthenticationError):
+        client.prompt("describe", image=local)
+    assert "PRIVATE" not in (tmp_path / "requests.jsonl").read_text()

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .schemas import FrontierResponse, safe_json
+from .image import sanitized_image_ref
 
 
 class ChatSession:
@@ -40,7 +41,7 @@ class ChatSession:
             raise RuntimeError("Use `with client.chat() as chat:` before sending messages.")
         response = self.client._invoke(prompt, image, self, schema)
         self.history.extend([
-            {"role": "user", "content": prompt, "image": str(image) if image is not None else None},
+            {"role": "user", "content": prompt, "image": sanitized_image_ref(image) if image is not None else None},
             {"role": "assistant", "content": response.text, "request_id": response.request_id,
              "usage": response.usage, "timestamp": response.timestamp},
         ])

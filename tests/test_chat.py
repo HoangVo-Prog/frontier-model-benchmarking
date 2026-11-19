@@ -39,3 +39,11 @@ def test_chat_export_only_json(client):
     with client.chat() as chat:
         with pytest.raises(ValueError):
             chat.export("chat.md")
+
+
+def test_chat_export_does_not_include_signed_url_secret(client, tmp_path):
+    with client.chat() as chat:
+        chat.send("describe", image="https://example.org/a.png?access_token=SECRET")
+        export = chat.export(tmp_path / "signed.json")
+    assert "SECRET" not in export.read_text()
+    assert "https://example.org/a.png" in export.read_text()
